@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "file-encoder"
-version = "0.1.2"
+version = "0.1.3"
 description = "A CLI tool for encoding files with various character encodings"
 authors = [{name = "Your Name", email = "your.email@example.com"}]
 readme = "README.md"
