@@ -1,0 +1,19 @@
+# buildspec.yml
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Installing dependencies..."
+      - python3 -m pip install --upgrade pip
+      - pip install -e .
+      - pip install ruff pytest pytest-cov
+  build:
+    commands:
+      - echo "Running Ruff lint..."
+      - ruff check .
+      - echo "Running pytest..."
+      - pytest -q
+artifacts:
+  files:
+    - '**/*'
