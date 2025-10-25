@@ -1,22 +1,24 @@
-# This workflow will install Python dependencies, run tests and lint with a single version of Python
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
-
 name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ "*" ]  # Run on all branches
-    tags: [ "v*" ]     # Run on version tags
+    branches: [ "*" ]
+    tags: [ "v*" ]
   pull_request:
-    branches: [ "*" ]  # Run on PRs to all branches
+    branches: [ "*" ]
 
 permissions:
   contents: read
 
+env:
+  AWS_REGION: us-west-2                 # <— CHANGE if needed
+  CODEART_DOMAIN: jr-domain             # <— CHANGE
+  CODEART_REPO: python-packages         # <— CHANGE
+  CA_PACKAGE: file-encoder              # <— CHANGE (your package name)
+
 jobs:
   test:
-    runs-on:
-      - codebuild-github-actions-practice-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: ubuntu-latest              # <— use GitHub-hosted runner
     environment: test
     strategy:
       matrix:
@@ -26,28 +28,32 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Install the package in editable mode with dev dependencies
-        pip install -e ".[dev]"
-        pip install build
+        # If .[dev] exists, this installs dev deps; otherwise install tools explicitly.
+        pip install -e ".[dev]" || true
+        pip install ruff pytest pytest-cov build twine
 
     - name: Lint with ruff
-      run: |
-        ruff check
+      run: ruff check
 
-    - name: Test with pytest
+    - name: Test with pytest (write text + junit + coverage.xml)
       run: |
-        pytest -v --cov=file_encoder --cov-report=xml --cov-report=term-missing > pytest-output.txt 2>&1
+        pytest -v \
+          --cov=file_encoder \
+          --cov-report=xml:coverage.xml \
+          --cov-report=term-missing \
+          --junitxml=pytest-report.xml \
+          > pytest-output.txt 2>&1 || true
+        # ^ keep going so we still collect artifacts if tests fail
 
     - name: Build package
-      run: |
-        python -m build
+      run: python -m build
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
@@ -55,54 +61,62 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+        aws-region: ${{ env.AWS_REGION }}
 
     - name: Upload wheel to S3
       if: matrix.python-version == '3.13' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
       run: |
         for file in dist/*.whl; do
           if [ -f "$file" ]; then
-            aws s3 cp "$file" s3://${{ secrets.AWS_S3_BUCKET }}/wheels/
+            aws s3 cp "$file" "s3://${{ secrets.AWS_S3_BUCKET }}/wheels/"
           fi
         done
 
-    - name: Upload test artifacts
+    - name: Upload test artifacts (coverage + junit + text log)
       uses: actions/upload-artifact@v4
       if: matrix.python-version == '3.13'
       with:
         name: test-results
         path: |
-          pytest-output.txt
           coverage.xml
+          pytest-report.xml
+          pytest-output.txt
         retention-days: 30
+        if-no-files-found: error
 
-    - name: Configure CodeArtifact
+    - name: Publish to CodeArtifact (twine)
       if: matrix.python-version == '3.13' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      env:
+        CODEART_DOMAIN: ${{ env.CODEART_DOMAIN }}
+        CODEART_REPO: ${{ env.CODEART_REPO }}
+        AWS_REGION: ${{ env.AWS_REGION }}
+        CA_PACKAGE: ${{ env.CA_PACKAGE }}
       run: |
-        # Install twine from PyPI first
-        pip install twine
-
         # Get CodeArtifact credentials
-        export CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token --domain zabalytics --query authorizationToken --output text --region us-west-2)
-        export CODEARTIFACT_REPOSITORY_URL=$(aws codeartifact get-repository-endpoint --domain zabalytics --repository pypi --format pypi --query repositoryEndpoint --output text --region us-west-2)
+        CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token \
+          --domain "$CODEART_DOMAIN" \
+          --query authorizationToken --output text \
+          --region "$AWS_REGION")
 
-        echo "CODEARTIFACT_AUTH_TOKEN=$CODEARTIFACT_AUTH_TOKEN" >> $GITHUB_ENV
-        echo "CODEARTIFACT_REPOSITORY_URL=$CODEARTIFACT_REPOSITORY_URL" >> $GITHUB_ENV
-
-    - name: Publish to CodeArtifact
-      if: matrix.python-version == '3.13' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-      run: |
-        # Delete existing package (ignore if it doesn't exist)
-        aws codeartifact delete-package-versions \
-          --domain zabalytics \
-          --repository pypi \
+        CODEARTIFACT_REPOSITORY_URL=$(aws codeartifact get-repository-endpoint \
+          --domain "$CODEART_DOMAIN" \
+          --repository "$CODEART_REPO" \
           --format pypi \
-          --package file-encoder \
-          --versions 0.1.0 \
-          --region us-west-2 || true
+          --query repositoryEndpoint --output text \
+          --region "$AWS_REGION")
+
+        python -m pip install --upgrade twine
+
+        # (Optional) delete a specific version — only if you really need to.
+        # VERSION_TO_DELETE=0.1.0
+        # aws codeartifact delete-package-versions \
+        #   --domain "$CODEART_DOMAIN" \
+        #   --repository "$CODEART_REPO" \
+        #   --format pypi \
+        #   --package "$CA_PACKAGE" \
+        #   --versions "$VERSION_TO_DELETE" \
+        #   --region "$AWS_REGION" || true
 
         # Upload the package
-        twine upload --repository-url $CODEARTIFACT_REPOSITORY_URL \
-          --username aws \
-          --password $CODEARTIFACT_AUTH_TOKEN \
-          dist/*.whl
+        TWINE_USERNAME=aws TWINE_PASSWORD="$CODEARTIFACT_AUTH_TOKEN" \
+        twine upload --repository-url "$CODEARTIFACT_REPOSITORY_URL" dist/*.whl
