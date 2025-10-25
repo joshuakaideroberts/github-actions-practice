@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-west-2                 # <— CHANGE if needed
+  AWS_REGION: us-west-1               # <— CHANGE if needed
   CODEART_DOMAIN: jr-domain             # <— CHANGE
   CODEART_REPO: python-packages         # <— CHANGE
   CA_PACKAGE: file-encoder              # <— CHANGE (your package name)
