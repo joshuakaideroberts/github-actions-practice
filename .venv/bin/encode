@@ -1,4 +1,4 @@
-#!/mnt/c/Users/pepsi/projects/github-actions-practice/.venv/bin/python
+#!/mnt/c/Users/pepsi/projects/github-actions-practice/.venv/bin/python3
 import sys
 from file_encoder.cli import main
 if __name__ == '__main__':
